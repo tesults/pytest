@@ -5,6 +5,7 @@ import tesults
 import sys
 import configparser
 import os
+import time
 from _pytest.runner import runtestprotocol
 
 
@@ -13,6 +14,8 @@ data = {
   'target': 'token',
   'results': { 'cases': [] }
 }
+
+startTimes = {}
 
 disabled = False
 nosuites = False
@@ -210,6 +213,12 @@ def filesForTest (suite, name):
             files.append(os.path.join(path, file))
   return files
 
+def pytest_runtest_setup(item):
+  global disabled
+  if (disabled == True):
+    return
+  startTimes[item.nodeid] = int(round(time.time() * 1000))
+
 # A pytest hook, called by pytest automatically - used to extract test case data and append it to the data global variable defined above.
 def pytest_runtest_protocol(item, nextitem):
   global disabled
@@ -245,6 +254,8 @@ def pytest_runtest_protocol(item, nextitem):
       testcase = {
       'name': name, 
       'result': tesultsFriendlyResult(report.outcome),
+      'start': startTimes[item.nodeid],
+      'end': int(round(time.time() * 1000)),
       'reason': reasonForFailure(report)
       }
       if (suite):
@@ -286,8 +297,7 @@ def pytest_runtest_protocol(item, nextitem):
           else:
             testcase['_' + marker.name] = marker.args[0]
       except AttributeError:
-        pass
-      
+        pass  
 
   return True
 # A pytest hook, called by pytest automatically - used to upload test results to tesults.
@@ -304,7 +314,7 @@ def pytest_unconfigure (config):
         buildcase['files'] = buildfiles
     data['results']['cases'].append(buildcase)
 
-  print ('-----Tesults output-----')
+  print ('Tesults results uploading...')
   if len(data['results']['cases']) > 0:
     #print ('data: ' + str(data))
     ret = tesults.results(data)
