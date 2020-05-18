@@ -44,7 +44,7 @@ Visit https://www.tesults.com/docs?doc=pytest for documentation.
 License
 -------
 
-Distributed under the terms of the `MIT`_ license, "pytest-tesults" is free and open source software
+Distributed under the terms of the MIT license, "pytest-tesults" is free and open source software
 
 
 Issues

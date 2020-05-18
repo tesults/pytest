@@ -22,6 +22,7 @@ setup(
     url='https://www.tesults.com/docs?doc=pytest',
     description='Tesults plugin for pytest',
     long_description=read('README.rst'),
+    long_description_content_type='text/x-rst',
     py_modules=['pytest_tesults'],
     python_requires='>=2.7',
     install_requires=['pytest>=3.5.0', 'tesults'],
