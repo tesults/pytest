@@ -4,20 +4,245 @@ import os
 import sys
 import time
 
+import attr
 import pytest
 import tesults
-from _pytest.runner import runtestprotocol
 
 
-# The data variable holds test results and tesults target information, at the end of test run it is uploaded to tesults for reporting.
-data = {"target": "token", "results": {"cases": []}}
+@attr.s(slots=True, hash=True)
+class Plugin:
+    inifile = attr.ib()
+    build_target = attr.ib()
+    build_name = attr.ib()
+    build_result = attr.ib()
+    build_desc = attr.ib()
+    build_reason = attr.ib()
+    files_path = attr.ib()
+    no_suites = attr.ib(default=False)
+    # Internal attributes
+    build_token = attr.ib(default=None, repr=False)
+    testcases = attr.ib(default=attr.Factory(list), hash=False, repr=False)
+    in_flight = attr.ib(default=attr.Factory(dict), hash=False, repr=False)
 
-startTimes = {}
+    def __attrs_post_init__(self):
+        if self.build_result not in ("pass", "fail", "unknown"):
+            self.build_result = "unknown"
+        self.discover_token()
 
-disabled = False
-nosuites = False
-filespath = None
-buildcase = None
+    @property
+    def disabled(self):
+        return self.build_target is None
+
+    def discover_token(self):
+        if self.disabled:
+            return
+        self.build_token = self.build_target
+        # Let's see if this is a target name and in that case try to get the token
+        if self.inifile is not None and os.path.exists(self.inifile):
+            # Let's load pytest.ini to see if we can find a tesults section
+            parser = configparser.ConfigParser()
+            parser.read(self.inifile)
+            try:
+                tesults_section = parser["tesults"]
+            except KeyError:
+                return
+
+            # Let's try to get a target from the tesults section
+            try:
+                build_token = tesults_section[self.build_target]
+                if build_token:
+                    self.build_token = build_token
+            except KeyError:
+                return
+
+    def friendly_result(self, outcome):
+        """
+        Converts pytest test outcome to a tesults friendly result (for example pytest uses 'passed', tesults uses 'pass')
+        """
+        if outcome == "passed":
+            return "pass"
+        elif outcome == "failed":
+            return "fail"
+        else:
+            return "unknown"
+
+    def reason_for_failure(self, report):
+        """
+        Extracts test failure reason
+        """
+        if report.outcome == "passed":
+            return ""
+        else:
+            return report.longreprtext
+
+    def params_for_test(self, item):
+        parametrize = None
+        try:
+            parametrize = item.get_marker("parametrize")
+        except AttributeError:
+            # No get_marker in pytest 4
+            pass
+        if parametrize is None:
+            try:
+                parametrize = item.get_closest_marker("parametrize")
+            except AttributeError:
+                # No get_closest_marker in pytest 3
+                pass
+        if parametrize:
+            index = 0
+            paramKeys = []
+            while index < len(parametrize.args):
+                keys = parametrize.args[index]
+                keys = keys.split(",")
+                for key in keys:
+                    paramKeys.append(key)
+                index = index + 2
+            params = {}
+            values = item.name.split("[")
+            if len(values) > 1:
+                values = values[1]
+                values = values[:-1]  # removes ']'
+                valuesSplit = values.split("-")  # values now separated
+                if len(valuesSplit) > len(paramKeys):
+                    params["[" + "-".join(paramKeys) + "]"] = "[" + values + "]"
+                else:
+                    for key in paramKeys:
+                        if len(valuesSplit) > 0:
+                            params[key] = valuesSplit.pop(0)
+                return params
+            else:
+                return None
+        else:
+            return None
+
+    def files_for_test(self, suite, name):
+        if self.files_path is None:
+            return
+        files = []
+        if suite is None:
+            suite = ""
+        path = os.path.join(self.files_path, suite, name)
+        if os.path.isdir(path):
+            for dirpath, dirnames, filenames in os.walk(path):
+                for fname in filenames:
+                    if fname != ".DS_Store":  # Exclude os files
+                        files.append(os.path.join(path, fname))
+        return files
+
+    def start_testcase(self, item):
+        if self.disabled:
+            return
+        self.in_flight[item.nodeid] = {"name": item.name, "start": int(round(time.time() * 1000))}
+
+    def stop_testcase(self, item):
+        if self.disabled:
+            return
+        self.in_flight[item.nodeid]["end"] = int(round(time.time() * 1000))
+
+    def record_testcase(self, item, report):
+        if report.when != "teardown":
+            return
+
+        try:
+            testcase = self.in_flight.pop(item.nodeid)
+        except KeyError:
+            return
+
+        name = item.name
+        suite = None
+        try:
+            suite = item.get_marker("suite")
+            if suite:
+                suite = suite.args[0]  # extract val from marker
+        except AttributeError:
+            # no get_marker if pytest 4
+            pass
+        if suite is None:
+            try:
+                suite = item.get_closest_marker("suite")
+                if suite:
+                    suite = suite.args[0]  # extract val from marker
+            except AttributeError:
+                # no get_closest_marker in pytest 3
+                pass
+        if suite is None:
+            if self.no_suites is False:
+                suite = str(item.parent.name)
+                suite = suite.rpartition("/")[2]
+                suite = suite.rpartition(".py")[0]
+
+        testcase.update(
+            {
+                "result": self.friendly_result(report.outcome),
+                "reason": self.reason_for_failure(report),
+            }
+        )
+        if suite:
+            testcase["suite"] = suite
+        files = self.files_for_test(suite, name)
+        if files:
+            testcase["files"] = files
+        params = self.params_for_test(item)
+        if params:
+            testcase["params"] = params
+            testname = item.name.split("[")
+            if testname:
+                testcase["name"] = testname[0]
+        description = None
+        try:
+            description = item.get_marker("description")
+        except AttributeError:
+            # no get_marker if pytest 4
+            pass
+        if description is None:
+            try:
+                description = item.get_closest_marker("description")
+            except AttributeError:
+                # no get_closest_marker in pytest 3
+                pass
+
+        if description:
+            testcase["desc"] = description.args[0]
+
+        try:
+            markers = item.iter_markers()
+            for marker in markers:
+                if marker.name in (
+                    "parametrize",
+                    "filterwarnings",
+                    "skip",
+                    "skipif",
+                    "usefixtures",
+                    "xfail",
+                    "suite",
+                ):
+                    continue
+                if marker.name in ("description", "desc"):
+                    testcase["desc"] = marker.args[0]
+                    continue
+                testcase["_{}".format(marker.name)] = marker.args[0]
+        except AttributeError:
+            pass
+        self.testcases.append(testcase)
+
+    def upload_results(self):
+        if not self.testcases:
+            # Report no test cases
+            return
+
+        build_case = {"name": self.build_name, "result": self.build_result, "suite": "[build]"}
+        if self.build_desc:
+            build_case["desc"] = self.build_desc
+        if self.build_reason:
+            build_case["reason"] = self.build_reason
+        build_files = self.files_for_test(build_case["suite"], self.build_name)
+        if build_files:
+            build_case["files"] = build_files
+
+        self.testcases.append(build_case)
+
+        data = {"target": self.build_token, "results": {"cases": self.testcases}}
+        return tesults.results(data)
 
 
 def pytest_addoption(parser):
@@ -79,267 +304,59 @@ def pytest_addoption(parser):
 
 
 def pytest_configure(config):
-    global data
+    inifile = config.inifile
+    if inifile:
+        inifile = os.path.join(config.rootdir, str(inifile))
+    build_target = config.getoption("--tesults-target")
+    build_name = config.getoption("--tesults-build-name")
+    build_desc = config.getoption("--tesults-build-description")
+    build_reason = config.getoption("--tesults-build-reason")
+    build_result = config.getoption("--tesults-build-result")
+    no_suites = config.getoption("--tesults-nosuites")
+    files_path = config.getoption("--tesults-files")
+    if build_result not in ("pass", "fail", "unknown"):
+        build_result = "unknown"
 
-    global disabled
-    targetKey = None
-    targetKey = config.option.target
-    if targetKey is None:
-        disabled = True
-        return
-
-    global nosuites
-    if config.getoption("--tesults-nosuites"):
-        nosuites = True
-
-    targetValue = None
-    configFileData = None
-    try:
-        if config.inifile:
-            inipath = os.path.join(config.rootdir, str(config.inifile))
-            configparse = configparser.ConfigParser()
-            configparse.read(inipath)
-            configFileData = configparse["tesults"]
-    except ValueError as error:
-        print("ValueError in pytest-tesults configuration: " + str(error))
-
-    try:
-        if configFileData:
-            targetValue = configFileData[targetKey]
-            data["target"] = targetValue
-    except ValueError as error:
-        print("ValueError in pytest-tesults configuration: " + str(error))
-        raise error
-    except KeyError as error:
-        print(
-            "pytest-tesults configuration: no key for target "
-            + str(error)
-            + " found in configuration files, will make target="
-            + targetKey
-        )
-
-    if targetKey:
-        if targetValue is None:
-            data["target"] = targetKey
-
-    # Files path
-    global filespath
-    filespath = config.option.filespath
-
-    # Report Build Information (Optional)
-    buildname = config.option.buildname
-    buildresult = config.option.buildresult
-    builddesc = config.option.builddesc
-    buildreason = config.option.buildreason
-    if buildresult != "pass" and buildresult != "fail":
-        buildresult = "unknown"
-    if buildname:
-        global buildcase
-        buildcase = {
-            "name": buildname,
-            "result": buildresult,
-            "suite": "[build]",
-        }
-        if builddesc:
-            buildcase["desc"] = builddesc
-        if buildreason:
-            buildcase["reason"] = buildreason
+    plugin = Plugin(
+        inifile=inifile,
+        build_target=build_target,
+        build_name=build_name,
+        build_result=build_result,
+        build_desc=build_desc,
+        build_reason=build_reason,
+        no_suites=no_suites,
+        files_path=files_path,
+    )
+    config.pluginmanager.register(plugin, "tesults_reporter")
 
 
-# Converts pytest test outcome to a tesults friendly result (for example pytest uses 'passed', tesults uses 'pass')
-def tesultsFriendlyResult(outcome):
-    if outcome == "passed":
-        return "pass"
-    elif outcome == "failed":
-        return "fail"
-    else:
-        return "unknown"
-
-
-# Extracts test failure reason
-def reasonForFailure(report):
-    if report.outcome == "passed":
-        return ""
-    else:
-        return report.longreprtext
-
-
-def paramsForTest(item):
-    paramKeysObj = None
-    try:
-        item.get_marker("parametrize")
-    except AttributeError:
-        # No get_marker in pytest 4
-        pass
-    if paramKeysObj is None:
-        try:
-            item.get_closest_marker("parametrize")
-        except AttributeError:
-            # No get_closest_marker in pytest 3
-            pass
-    if paramKeysObj:
-        index = 0
-        paramKeys = []
-        while index < len(paramKeysObj.args):
-            keys = paramKeysObj.args[index]
-            keys = keys.split(",")
-            for key in keys:
-                paramKeys.append(key)
-            index = index + 2
-        params = {}
-        values = item.name.split("[")
-        if len(values) > 1:
-            values = values[1]
-            values = values[:-1]  # removes ']'
-            valuesSplit = values.split("-")  # values now separated
-            if len(valuesSplit) > len(paramKeys):
-                params["[" + "-".join(paramKeys) + "]"] = "[" + values + "]"
-            else:
-                for key in paramKeys:
-                    if len(valuesSplit) > 0:
-                        params[key] = valuesSplit.pop(0)
-            return params
-        else:
-            return None
-    else:
-        return None
-
-
-def filesForTest(suite, name):
-    global filespath
-    if filespath is None:
-        return
-    files = []
-    if suite is None:
-        suite = ""
-    path = os.path.join(filespath, suite, name)
-    if os.path.isdir(path):
-        for dirpath, dirnames, filenames in os.walk(path):
-            for file in filenames:
-                if file != ".DS_Store":  # Exclude os files
-                    files.append(os.path.join(path, file))
-    return files
-
-
-def pytest_runtest_setup(item):
-    global disabled
-    if disabled == True:
-        return
-    startTimes[item.nodeid] = int(round(time.time() * 1000))
-
-
-# A pytest hook, called by pytest automatically - used to extract test case data and append it to the data global variable defined above.
-def pytest_runtest_protocol(item, nextitem):
-    global disabled
-    if disabled == True:
-        return
-    global data
-    reports = runtestprotocol(item, nextitem=nextitem)
-    for report in reports:
-        if report.when == "call":
-            name = item.name
-            suite = None
-            try:
-                suite = item.get_marker("suite")
-                if suite:
-                    suite = suite.args[0]  # extract val from marker
-            except AttributeError:
-                # no get_marker if pytest 4
-                pass
-            if suite is None:
-                try:
-                    suite = item.get_closest_marker("suite")
-                    if suite:
-                        suite = suite.args[0]  # extract val from marker
-                except AttributeError:
-                    # no get_closest_marker in pytest 3
-                    pass
-            if suite is None:
-                global nosuites
-                if nosuites == False:
-                    suite = str(item.parent.name)
-                    suite = suite.rpartition("/")[2]
-                    suite = suite.rpartition(".py")[0]
-            testcase = {
-                "name": name,
-                "result": tesultsFriendlyResult(report.outcome),
-                "start": startTimes[item.nodeid],
-                "end": int(round(time.time() * 1000)),
-                "reason": reasonForFailure(report),
-            }
-            if suite:
-                testcase["suite"] = suite
-            files = filesForTest(suite, name)
-            if files:
-                if len(files) > 0:
-                    testcase["files"] = files
-            params = paramsForTest(item)
-            if params:
-                testcase["params"] = params
-                testname = item.name.split("[")
-                if len(testname) > 1:
-                    testcase["name"] = testname[0]
-            paramDesc = None
-            try:
-                paramDesc = item.get_marker("description")
-            except AttributeError:
-                # no get_marker if pytest 4
-                pass
-            if paramDesc is None:
-                try:
-                    paramDesc = item.get_closest_marker("description")
-                except AttributeError:
-                    # no get_closest_marker in pytest 3
-                    pass
-
-            if paramDesc:
-                testcase["desc"] = paramDesc.args[0]
-            data["results"]["cases"].append(testcase)
-
-            try:
-                markers = item.iter_markers()
-                for marker in markers:
-                    if marker.name == "description" or marker.name == "desc":
-                        testcase["desc"] = marker.args[0]
-                    elif (
-                        marker.name == "parametrize"
-                        or marker.name == "filterwarnings"
-                        or marker.name == "skip"
-                        or marker.name == "skipif"
-                        or marker.name == "usefixtures"
-                        or marker.name == "xfail"
-                        or marker.name == "suite"
-                    ):
-                        pass
-                    else:
-                        testcase["_" + marker.name] = marker.args[0]
-            except AttributeError:
-                pass
-
-    return True
-
-
-# A pytest hook, called by pytest automatically - used to upload test results to tesults.
 def pytest_unconfigure(config):
-    global disabled
-    if disabled == True:
-        return
-    global data
-    global buildcase
-    if buildcase:
-        buildfiles = filesForTest(buildcase["suite"], buildcase["name"])
-        if buildfiles:
-            if len(buildfiles) > 0:
-                buildcase["files"] = buildfiles
-        data["results"]["cases"].append(buildcase)
+    plugin = config.pluginmanager.getplugin("tesults_reporter")
+    if plugin:
+        # Unregister
+        config.pluginmanager.unregister(plugin, "tesults_reporter")
 
-    print("Tesults results uploading...")
-    if len(data["results"]["cases"]) > 0:
-        # print ('data: ' + str(data))
-        ret = tesults.results(data)
-        print("success: " + str(ret["success"]))
-        print("message: " + str(ret["message"]))
-        print("warnings: " + str(ret["warnings"]))
-        print("errors: " + str(ret["errors"]))
-    else:
-        print("No test results.")
+
+@pytest.hookimpl(tryfirst=True, hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    # execute all other hooks to obtain the report object
+    report = (yield).get_result()
+
+    plugin = item.config.pluginmanager.getplugin("tesults_reporter")
+    if plugin and not plugin.disabled:
+        if report.when == "setup":
+            plugin.start_testcase(item)
+        if report.when == "teardown":
+            plugin.stop_testcase(item)
+            plugin.record_testcase(item, report)
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    plugin = config.pluginmanager.getplugin("tesults_reporter")
+    if plugin:
+        ret = plugin.upload_results()
+        terminalreporter.ensure_newline()
+        terminalreporter.section("TResults Upload Info", sep="=", bold=True)
+        for key, value in ret.items():
+            terminalreporter.line("{}: {}".format(key.capitalize(), value))
