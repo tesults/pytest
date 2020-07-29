@@ -220,7 +220,10 @@ class Plugin:
                 if marker.name in ("description", "desc"):
                     testcase["desc"] = marker.args[0]
                     continue
-                testcase["_{}".format(marker.name)] = marker.args[0]
+                try:
+                    testcase["_{}".format(marker.name)] = marker.args[0]
+                except IndexError:
+                    testcase["_{}".format(marker.name)] = marker.name
         except AttributeError:
             pass
         self.testcases.append(testcase)
