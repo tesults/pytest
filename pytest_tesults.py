@@ -359,7 +359,8 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
     plugin = config.pluginmanager.getplugin("tesults_reporter")
     if plugin:
         ret = plugin.upload_results()
-        terminalreporter.ensure_newline()
-        terminalreporter.section("TResults Upload Info", sep="=", bold=True)
-        for key, value in ret.items():
-            terminalreporter.line("{}: {}".format(key.capitalize(), value))
+        if ret:
+            terminalreporter.ensure_newline()
+            terminalreporter.section("TResults Upload Info", sep="=", bold=True)
+            for key, value in ret.items():
+                terminalreporter.line("{}: {}".format(key.capitalize(), value))
