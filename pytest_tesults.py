@@ -4,6 +4,7 @@ import pytest
 import tesults
 import sys
 import configparser
+import toml
 import os
 import time
 from _pytest.runner import runtestprotocol
@@ -99,11 +100,18 @@ def pytest_configure(config):
     try:
       if (config.inifile):
         inipath = os.path.join(config.rootdir, str(config.inifile))
-        configparse = configparser.ConfigParser()
-        configparse.read(inipath)
-        configFileData = configparse['tesults']
+        if (str(config.inifile).endswith('.toml')):
+            configFileData = toml.load(inipath)
+            configFileData['tesults']
+            configFileData = configFileData.get('tesults')
+        else:
+            configparse = configparser.ConfigParser()
+            configparse.read(inipath)
+            configFileData = configparse['tesults']
     except ValueError as error:
       print('ValueError in pytest-tesults configuration: ' + str(error))
+    except:
+      print('Unexpected error reading configuration file in pytest-tesults')
     
     try:
       if (configFileData):

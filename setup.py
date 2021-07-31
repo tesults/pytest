@@ -13,13 +13,13 @@ def read(fname):
 
 setup(
     name='pytest-tesults',
-    version='1.2.0',
+    version='1.3.0',
     author='Tesults',
     author_email='help@tesults.com',
     maintainer='Tesults',
     maintainer_email='help@tesults.com',
     license='MIT',
-    url='https://www.tesults.com/docs?doc=pytest',
+    url='https://www.tesults.com/docs/pytest',
     description='Tesults plugin for pytest',
     long_description=read('README.rst'),
     long_description_content_type='text/x-rst',

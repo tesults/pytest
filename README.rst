@@ -16,7 +16,7 @@ Use pytest-tesults to automatically integrate with Tesults.
 
 For complete details visit:
 
-https://www.tesults.com/docs?doc=pytest
+https://www.tesults.com/docs/pytest
 
 
 Requirements
@@ -38,7 +38,7 @@ $ pip install pytest-tesults
 Usage
 -----
 
-Visit https://www.tesults.com/docs?doc=pytest for documentation.
+Visit https://www.tesults.com/docs/pytest for documentation.
 
 
 License
