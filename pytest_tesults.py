@@ -241,7 +241,8 @@ def pytest_runtest_protocol(item, nextitem):
       try:
         suite = item.get_marker('suite')
         if (suite):
-          suite = suite.args[0] #extract val from marker
+          if len(suite.args) > 0:
+            suite = suite.args[0] #extract val from marker
       except AttributeError:
         # no get_marker if pytest 4
         pass
@@ -249,7 +250,8 @@ def pytest_runtest_protocol(item, nextitem):
         try:
           suite = item.get_closest_marker('suite')
           if (suite):
-            suite = suite.args[0] #extract val from marker
+            if len(suite.args) > 0:
+              suite = suite.args[0] #extract val from marker
         except AttributeError:
           # no get_closest_marker in pytest 3
           pass
@@ -292,18 +294,21 @@ def pytest_runtest_protocol(item, nextitem):
           pass
 
       if (paramDesc):
-        testcase['desc'] = paramDesc.args[0]
+        if len(paramDesc.args) > 0:
+          testcase['desc'] = paramDesc.args[0]
       data['results']['cases'].append(testcase)
 
       try:
         markers = item.iter_markers()
         for marker in markers:
           if (marker.name == 'description' or marker.name == 'desc'):
-            testcase['desc'] = marker.args[0]
+            if len(marker.args) > 0:
+              testcase['desc'] = marker.args[0]
           elif (marker.name == 'parametrize' or marker.name == 'filterwarnings' or marker.name == 'skip' or marker.name == 'skipif' or marker.name == 'usefixtures' or marker.name == 'xfail' or marker.name == 'suite'):
             pass
           else:
-            testcase['_' + marker.name] = marker.args[0]
+            if len(marker.args) > 0:
+              testcase['_' + marker.name] = marker.args[0]
       except AttributeError:
         pass  
 
