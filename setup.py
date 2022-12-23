@@ -13,7 +13,7 @@ def read(fname):
 
 setup(
     name='pytest-tesults',
-    version='1.3.1',
+    version='1.4.0',
     author='Tesults',
     author_email='help@tesults.com',
     maintainer='Tesults',

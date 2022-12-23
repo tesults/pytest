@@ -7,13 +7,15 @@ import configparser
 import toml
 import os
 import time
+import shutil
 from _pytest.runner import runtestprotocol
 
 
 # The data variable holds test results and tesults target information, at the end of test run it is uploaded to tesults for reporting.
 data = {
   'target': 'token',
-  'results': { 'cases': [] }
+  'results': { 'cases': [] },
+  'metadata': {'integration_name': 'pytest-tesults', 'integration_version': '1.4.0', 'test_framework': 'pytest' }
 }
 
 startTimes = {}
@@ -45,6 +47,11 @@ def pytest_addoption(parser):
       dest='filespath',
       default=None,
       help='Path to files for test cases'
+    )
+    group.addoption(
+      '--tesults-save-stdout',
+      action='store_true',
+      help='Save stdout in test cases to file for upload'
     )
     group.addoption(
       '--tesults-nosuites',
@@ -91,6 +98,12 @@ def pytest_configure(config):
       disabled = True
       return
 
+    global saveStdOut
+    if (config.getoption('--tesults-save-stdout')):
+      saveStdOut = True
+    else:
+      saveStdOut = False
+
     global nosuites
     if (config.getoption('--tesults-nosuites')):
       nosuites = True
@@ -131,11 +144,19 @@ def pytest_configure(config):
     global filespath
     filespath = config.option.filespath
 
+    if filespath is None:
+      if saveStdOut == True:
+        filespath = "tesults-temp"
+
+    if filespath is not None:
+      deleteTempDir()
+
     # Report Build Information (Optional)
     buildname = config.option.buildname
     buildresult = config.option.buildresult
     builddesc = config.option.builddesc
     buildreason = config.option.buildreason
+    buildRawResult = buildresult
     if (buildresult != 'pass' and buildresult != 'fail'):
         buildresult = 'unknown'
     if (buildname):
@@ -143,6 +164,7 @@ def pytest_configure(config):
       buildcase = {
         'name': buildname,
         'result': buildresult,
+        'rawResult': buildRawResult,
         'suite': '[build]',
       }
       if (builddesc):
@@ -213,13 +235,46 @@ def filesForTest (suite, name):
   files = []
   if (suite is None):
     suite = ''
-  path = os.path.join(filespath, suite, name)
+  path = os.path.join(os.path.dirname(os.path.realpath(__file__)), filespath, suite, name)
   if os.path.isdir(path):
     for dirpath, dirnames, filenames in os.walk(path):
         for file in filenames:
           if file != '.DS_Store': # Exclude os files
             files.append(os.path.join(path, file))
   return files
+
+def deleteTempDir ():
+  try:
+    global filespath
+    temp_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), filespath)
+    shutil.rmtree(temp_dir)
+  except OSError as e:
+    print("Error deleting temp dir in pytest-tesults")
+
+def saveStdOutToFile (stdout, suite, name):
+  global disabled
+  global filespath
+  global saveStdOut
+  if (disabled == True):
+    return
+  if (saveStdOut != True):
+    return
+  try:
+      temp_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), filespath)
+      suite_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), filespath, suite)
+      test_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), filespath, suite, name)
+      if not os.path.exists(temp_dir):
+          os.makedirs(temp_dir)
+      if not os.path.exists(suite_dir):
+          os.makedirs(suite_dir)
+      if not os.path.exists(test_dir):
+          os.makedirs(test_dir)
+      log_file_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), filespath, suite, name, "stdout.log")
+      f = open(log_file_path, 'w+')  # open file in write mode
+      f.write(stdout)
+      f.close()
+  except:
+      print("exception in pytests_runtest_teardown in pytest-tesults")
 
 def pytest_runtest_setup(item):
   global disabled
@@ -233,6 +288,7 @@ def pytest_runtest_protocol(item, nextitem):
   if (disabled == True):
     return
   global data
+  global saveStdOut
   reports = runtestprotocol(item, nextitem=nextitem)
   for report in reports:
     if report.when == 'call':
@@ -264,12 +320,24 @@ def pytest_runtest_protocol(item, nextitem):
       testcase = {
       'name': name, 
       'result': tesultsFriendlyResult(report.outcome),
+      'rawResult': report.outcome,
       'start': startTimes[item.nodeid],
       'end': int(round(time.time() * 1000)),
       'reason': reasonForFailure(report)
       }
       if (suite):
         testcase['suite'] = suite
+      if saveStdOut == True:
+        try:
+          if item._report_sections:
+            report_sections = item._report_sections
+            for section in report_sections:
+              if section[0] == 'call':
+                if section[1] == 'stdout':
+                  text = section[2]
+                  saveStdOutToFile(text, suite, name)
+        except:
+          pass
       files = filesForTest(suite, name)
       if (files):
         if len(files) > 0:
@@ -280,7 +348,7 @@ def pytest_runtest_protocol(item, nextitem):
         testname = item.name.split('[')
         if len(testname) > 1:
           testcase['name'] = testname[0]
-      paramDesc = None
+      paramDesc = None       
       try:
         paramDesc = item.get_marker('description')
       except AttributeError:
