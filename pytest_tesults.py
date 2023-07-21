@@ -15,7 +15,7 @@ from _pytest.runner import runtestprotocol
 data = {
   'target': 'token',
   'results': { 'cases': [] },
-  'metadata': {'integration_name': 'pytest-tesults', 'integration_version': '1.4.0', 'test_framework': 'pytest' }
+  'metadata': {'integration_name': 'pytest-tesults', 'integration_version': '1.5.0', 'test_framework': 'pytest' }
 }
 
 startTimes = {}
@@ -291,7 +291,7 @@ def pytest_runtest_protocol(item, nextitem):
   global saveStdOut
   reports = runtestprotocol(item, nextitem=nextitem)
   for report in reports:
-    if report.when == 'call':
+    if report.skipped == True or report.when == 'call':
       name = item.name
       suite = None
       try:
@@ -321,10 +321,11 @@ def pytest_runtest_protocol(item, nextitem):
       'name': name, 
       'result': tesultsFriendlyResult(report.outcome),
       'rawResult': report.outcome,
-      'start': startTimes[item.nodeid],
-      'end': int(round(time.time() * 1000)),
-      'reason': reasonForFailure(report)
+      'reason': reasonForFailure(report),
+      'end': int(round(time.time() * 1000))
       }
+      if item.nodeid in startTimes:
+        testcase['start'] = startTimes[item.nodeid]  
       if (suite):
         testcase['suite'] = suite
       if saveStdOut == True:
