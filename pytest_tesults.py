@@ -15,10 +15,11 @@ from _pytest.runner import runtestprotocol
 data = {
   'target': 'token',
   'results': { 'cases': [] },
-  'metadata': {'integration_name': 'pytest-tesults', 'integration_version': '1.5.0', 'test_framework': 'pytest' }
+  'metadata': {'integration_name': 'pytest-tesults', 'integration_version': '1.6.0', 'test_framework': 'pytest' }
 }
 
 startTimes = {}
+testFiles = {}
 
 disabled = False
 nosuites = False
@@ -228,11 +229,15 @@ def paramsForTest (item):
     else:
         return None
 
-def filesForTest (suite, name):
+def filesForTest (nodeid, suite, name):
+  files = []
+  if nodeid is not None:
+    if nodeid in testFiles:
+      for file in testFiles[nodeid]:
+        files.append(file)
   global filespath
   if (filespath is None):
-    return
-  files = []
+    return files  
   if (suite is None):
     suite = ''
   path = os.path.join(os.path.dirname(os.path.realpath(__file__)), filespath, suite, name)
@@ -339,7 +344,7 @@ def pytest_runtest_protocol(item, nextitem):
                   saveStdOutToFile(text, suite, name)
         except:
           pass
-      files = filesForTest(suite, name)
+      files = filesForTest(item.nodeid, suite, name)
       if (files):
         if len(files) > 0:
           testcase['files'] = files
@@ -390,7 +395,7 @@ def pytest_unconfigure (config):
   global data
   global buildcase
   if (buildcase):
-    buildfiles = filesForTest(buildcase['suite'], buildcase['name'])
+    buildfiles = filesForTest(None, buildcase['suite'], buildcase['name'])
     if (buildfiles):
       if len(buildfiles) > 0:
         buildcase['files'] = buildfiles
@@ -406,3 +411,22 @@ def pytest_unconfigure (config):
     print ('errors: ' + str(ret['errors']))
   else:
     print ('No test results.')
+
+
+# Enhanced reporting - file function
+def file (request, file):
+  global disabled
+  if (disabled == True):
+    return
+  if request is None:
+    return
+  if request.node is None:
+    return
+  if request.node.nodeid is None:
+    return
+  if file is None:
+    return
+  if request.node.nodeid in testFiles:
+    testFiles[request.node.nodeid].append(file)
+  else:
+    testFiles[request.node.nodeid] = [file]
