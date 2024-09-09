@@ -15,7 +15,7 @@ from _pytest.runner import runtestprotocol
 data = {
   'target': 'token',
   'results': { 'cases': [] },
-  'metadata': {'integration_name': 'pytest-tesults', 'integration_version': '1.6.0', 'test_framework': 'pytest' }
+  'metadata': {'integration_name': 'pytest-tesults', 'integration_version': '1.7.0', 'test_framework': 'pytest' }
 }
 
 startTimes = {}
@@ -377,12 +377,12 @@ def pytest_runtest_protocol(item, nextitem):
         for marker in markers:
           if (marker.name == 'description' or marker.name == 'desc'):
             if len(marker.args) > 0:
-              testcase['desc'] = marker.args[0]
+              testcase['desc'] = str(marker.args[0])
           elif (marker.name == 'parametrize' or marker.name == 'filterwarnings' or marker.name == 'skip' or marker.name == 'skipif' or marker.name == 'usefixtures' or marker.name == 'xfail' or marker.name == 'suite'):
             pass
           else:
             if len(marker.args) > 0:
-              testcase['_' + marker.name] = marker.args[0]
+              testcase['_' + marker.name] = str(marker.args[0])
       except AttributeError:
         pass  
 
