@@ -15,7 +15,7 @@ from _pytest.runner import runtestprotocol
 data = {
   'target': 'token',
   'results': { 'cases': [] },
-  'metadata': {'integration_name': 'pytest-tesults', 'integration_version': '1.7.0', 'test_framework': 'pytest' }
+  'metadata': {'integration_name': 'pytest-tesults', 'integration_version': '1.8.0', 'test_framework': 'pytest' }
 }
 
 startTimes = {}
@@ -140,7 +140,10 @@ def pytest_configure(config):
     if (targetKey):
       if (targetValue is None):
         data['target'] = targetKey
-
+      if (targetValue is None):
+        if targetKey in os.environ:
+            data['target'] = os.getenv(targetKey)
+    
     # Files path
     global filespath
     filespath = config.option.filespath
