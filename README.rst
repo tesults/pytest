@@ -41,6 +41,26 @@ Usage
 Visit https://www.tesults.com/docs/pytest for documentation.
 
 
+GitHub Actions
+--------------
+
+``pytest-tesults`` can produce a local results file for the Tesults Test
+Automation Reporting action. No Tesults target token is required for this
+mode.
+
+Install ``pytest-tesults>=1.9.0``, add the action before the test step, and run
+pytest as usual:
+
+.. code-block:: yaml
+
+   - uses: tesults/test-automation-reporting@v1
+   - run: pytest
+
+The action sets ``TESULTS_OUTPUT_FILE`` automatically. If both that environment
+variable and ``--tesults-target`` are present, the reporter writes the local
+results file and uploads the same run to Tesults.
+
+
 License
 -------
 

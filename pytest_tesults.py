@@ -3,19 +3,24 @@
 import pytest
 import tesults
 import sys
-import configparser
+try:
+  import configparser
+except ImportError:
+  import ConfigParser as configparser
 import toml
 import os
 import time
 import shutil
+import json
 from _pytest.runner import runtestprotocol
+from pytest_tesults_version import __version__
 
 
 # The data variable holds test results and tesults target information, at the end of test run it is uploaded to tesults for reporting.
 data = {
-  'target': 'token',
+  'target': '',
   'results': { 'cases': [] },
-  'metadata': {'integration_name': 'pytest-tesults', 'integration_version': '1.8.0', 'test_framework': 'pytest' }
+  'metadata': {'integration_name': 'pytest-tesults', 'integration_version': __version__, 'test_framework': 'pytest' }
 }
 
 startTimes = {}
@@ -25,6 +30,35 @@ disabled = False
 nosuites = False
 filespath = None
 buildcase = None
+saveStdOut = False
+outputFile = None
+
+def isXdistWorker (config):
+  return hasattr(config, 'workerinput')
+
+def resetState ():
+  global data
+  global startTimes
+  global testFiles
+  global disabled
+  global nosuites
+  global filespath
+  global buildcase
+  global saveStdOut
+  global outputFile
+  data = {
+    'target': '',
+    'results': { 'cases': [] },
+    'metadata': {'integration_name': 'pytest-tesults', 'integration_version': __version__, 'test_framework': 'pytest' }
+  }
+  startTimes = {}
+  testFiles = {}
+  disabled = False
+  nosuites = False
+  filespath = None
+  buildcase = None
+  saveStdOut = False
+  outputFile = os.getenv('TESULTS_OUTPUT_FILE')
 
 def pytest_addoption(parser):
     # Args: 
@@ -91,11 +125,12 @@ def pytest_addoption(parser):
 
 def pytest_configure(config):
     global data
-    
     global disabled
+    global outputFile
+    resetState()
     targetKey = None
     targetKey = config.option.target
-    if (targetKey is None):
+    if (targetKey is None and not outputFile):
       disabled = True
       return
 
@@ -111,33 +146,33 @@ def pytest_configure(config):
 
     targetValue = None
     configFileData = None
-    try:
-      if (config.inifile):
-        inipath = os.path.join(config.rootdir, str(config.inifile))
-        if (str(config.inifile).endswith('.toml')):
-            configFileData = toml.load(inipath)
-            configFileData['tesults']
-            configFileData = configFileData.get('tesults')
-        else:
-            configparse = configparser.ConfigParser()
-            configparse.read(inipath)
-            configFileData = configparse['tesults']
-    except ValueError as error:
-      print('ValueError in pytest-tesults configuration: ' + str(error))
-    except:
-      print('Unexpected error reading configuration file in pytest-tesults')
-    
-    try:
-      if (configFileData):
-        targetValue = configFileData[targetKey]
-        data['target'] = targetValue
-    except ValueError as error:
-      print('ValueError in pytest-tesults configuration: ' + str(error))
-      raise error
-    except KeyError as error:
-      print('pytest-tesults configuration: no key for target ' + str(error) + ' found in configuration files, will make target=' + targetKey)
-
     if (targetKey):
+      try:
+        if (config.inifile):
+          inipath = os.path.join(config.rootdir, str(config.inifile))
+          if (str(config.inifile).endswith('.toml')):
+              configFileData = toml.load(inipath)
+              configFileData['tesults']
+              configFileData = configFileData.get('tesults')
+          else:
+              configparse = configparser.ConfigParser()
+              configparse.read(inipath)
+              configFileData = configparse['tesults']
+      except ValueError as error:
+        print('ValueError in pytest-tesults configuration: ' + str(error))
+      except:
+        print('Unexpected error reading configuration file in pytest-tesults')
+
+      try:
+        if (configFileData):
+          targetValue = configFileData[targetKey]
+          data['target'] = targetValue
+      except ValueError as error:
+        print('ValueError in pytest-tesults configuration: ' + str(error))
+        raise error
+      except KeyError as error:
+        print('pytest-tesults configuration: no key for target ' + str(error) + ' found in configuration files, will make target=' + targetKey)
+
       if (targetValue is None):
         data['target'] = targetKey
       if (targetValue is None):
@@ -152,7 +187,7 @@ def pytest_configure(config):
       if saveStdOut == True:
         filespath = "tesults-temp"
 
-    if filespath is not None:
+    if filespath is not None and not isXdistWorker(config):
       deleteTempDir()
 
     # Report Build Information (Optional)
@@ -237,7 +272,7 @@ def filesForTest (nodeid, suite, name):
   if nodeid is not None:
     if nodeid in testFiles:
       for file in testFiles[nodeid]:
-        files.append(file)
+        files.append(os.path.abspath(file))
   global filespath
   if (filespath is None):
     return files  
@@ -248,7 +283,7 @@ def filesForTest (nodeid, suite, name):
     for dirpath, dirnames, filenames in os.walk(path):
         for file in filenames:
           if file != '.DS_Store': # Exclude os files
-            files.append(os.path.join(path, file))
+            files.append(os.path.abspath(os.path.join(dirpath, file)))
   return files
 
 def deleteTempDir ():
@@ -256,8 +291,8 @@ def deleteTempDir ():
     global filespath
     temp_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), filespath)
     shutil.rmtree(temp_dir)
-  except OSError as e:
-    print("Error deleting temp dir in pytest-tesults")
+  except OSError:
+    pass
 
 def saveStdOutToFile (stdout, suite, name):
   global disabled
@@ -390,10 +425,54 @@ def pytest_runtest_protocol(item, nextitem):
         pass  
 
   return True
+
+def pytest_sessionfinish (session, exitstatus):
+  global disabled
+  global data
+  if (disabled == True):
+    return
+  if isXdistWorker(session.config):
+    session.config.workeroutput['tesults_results'] = data['results']
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_testnodedown (node, error):
+  global disabled
+  global data
+  if (disabled == True):
+    return
+  workeroutput = getattr(node, 'workeroutput', None)
+  if not workeroutput:
+    return
+  workerresults = workeroutput.get('tesults_results')
+  if workerresults:
+    data['results']['cases'].extend(workerresults.get('cases', []))
+
+def writeOutputFile ():
+  global data
+  global outputFile
+  if not outputFile:
+    return False
+  try:
+    absoluteOutputFile = os.path.abspath(outputFile)
+    outputDirectory = os.path.dirname(absoluteOutputFile)
+    if outputDirectory and not os.path.exists(outputDirectory):
+      os.makedirs(outputDirectory)
+    localData = dict(data)
+    localData['target'] = ''
+    with open(absoluteOutputFile, 'w') as output:
+      json.dump(localData, output)
+    print('Tesults results written to ' + absoluteOutputFile)
+    return True
+  except Exception as error:
+    print('Error writing Tesults results file: ' + str(error))
+    return False
+
 # A pytest hook, called by pytest automatically - used to upload test results to tesults.
 def pytest_unconfigure (config):
   global disabled
   if (disabled == True):
+    return
+  if isXdistWorker(config):
     return
   global data
   global buildcase
@@ -403,6 +482,11 @@ def pytest_unconfigure (config):
       if len(buildfiles) > 0:
         buildcase['files'] = buildfiles
     data['results']['cases'].append(buildcase)
+
+  writeOutputFile()
+
+  if not data['target']:
+    return
 
   print ('Tesults results uploading...')
   if len(data['results']['cases']) > 0:
@@ -430,6 +514,6 @@ def file (request, file):
   if file is None:
     return
   if request.node.nodeid in testFiles:
-    testFiles[request.node.nodeid].append(file)
+    testFiles[request.node.nodeid].append(os.path.abspath(file))
   else:
-    testFiles[request.node.nodeid] = [file]
+    testFiles[request.node.nodeid] = [os.path.abspath(file)]

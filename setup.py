@@ -4,6 +4,7 @@
 import os
 import codecs
 from setuptools import setup
+from pytest_tesults_version import __version__
 
 
 def read(fname):
@@ -13,7 +14,7 @@ def read(fname):
 
 setup(
     name='pytest-tesults',
-    version='1.8.0',
+    version=__version__,
     author='Tesults',
     author_email='help@tesults.com',
     maintainer='Tesults',
@@ -23,9 +24,9 @@ setup(
     description='Tesults plugin for pytest',
     long_description=read('README.rst'),
     long_description_content_type='text/x-rst',
-    py_modules=['pytest_tesults'],
+    py_modules=['pytest_tesults', 'pytest_tesults_version'],
     python_requires='>=2.7',
-    install_requires=['pytest>=3.5.0', 'tesults'],
+    install_requires=['pytest>=3.5.0', 'tesults>=1.2.2', 'toml', 'configparser; python_version < "3"'],
     keywords='tesults test results automation automated dashboard reporting pytest plugin',
     classifiers=[
         'Framework :: Pytest',
